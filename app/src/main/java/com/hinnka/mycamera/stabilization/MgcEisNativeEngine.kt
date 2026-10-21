@@ -5,20 +5,15 @@ import com.hinnka.mycamera.utils.PLog
 import java.io.File
 
 /**
- * Lifecycle wrapper around Photon’s source reconstruction of MGC’s sensor EIS path.
+ * Lifecycle wrapper for the app's software sensor-fusion EIS+ engine.
  *
- * MGC 9.6.080 resolves the installed `device_key=blueline` to product profile 7. The original
- * factory selects method 4, 12 strips and a seven-frame look-ahead for that profile. This class
- * owns the recovered gyro queues, motion filtering, look-ahead, crop constraints and rolling-
- * shutter projection as ordinary app source compiled into `libmy-native-lib.so`; it never loads
- * `libgcastartup.so`. Camera2 OIS shifts or API-35 dynamic intrinsics are interpolated on the same
- * rolling-shutter row timestamps and applied only to the real-camera projection.
+ * The engine consumes timestamp-matched Camera2 frames, calibrated gyroscope samples, rolling-
+ * shutter timing and optional OIS/dynamic-intrinsics telemetry. Its bridge is implemented in
+ * Kotlin in this repository; EIS+ does not depend on an unshipped JNI library.
  */
 internal class MgcEisNativeEngine(cacheDirectory: File) {
     companion object {
         private const val TAG = "MgcEisNativeEngine"
-        private const val MGC_DEVICE_KEY = "blueline"
-        private const val MGC_DEVICE_TYPE = 7
         const val STRIP_COUNT = 12
         const val LOOKAHEAD_FRAME_COUNT = 7
     }
@@ -91,8 +86,7 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
             diagnosticTrace.start(width, height, frontFacing, strength)
             PLog.i(
                 TAG,
-                "Reconstructed MGC EIS started: device=$MGC_DEVICE_KEY, profile=$MGC_DEVICE_TYPE, " +
-                    "frame=${width}x$height, " +
+                "Software EIS+ started: frame=${width}x$height, " +
                     "strips=$STRIP_COUNT, lookahead=$normalizedLookahead, " +
                     "strength=$strength, front=$frontFacing",
             )
