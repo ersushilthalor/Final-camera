@@ -2862,12 +2862,13 @@ class Camera2Controller(private val context: Context) {
         }
 
         val requestedConfig = _state.value.videoConfig
+        val algorithmicStabilizationSupported =
+            realtimeStabilizationCoordinator.isCameraSupported(resolvedCharacteristics) &&
+                !isEnhancedStabilizationUnavailableForCurrentCamera()
         val snapshot = VideoCapabilitiesResolver.resolve(
             characteristics = resolvedCharacteristics,
             requestedConfig = requestedConfig,
-            algorithmicStabilizationSupported =
-                realtimeStabilizationCoordinator.isCameraSupported(resolvedCharacteristics) &&
-                    !isEnhancedStabilizationUnavailableForCurrentCamera(),
+            algorithmicStabilizationSupported = algorithmicStabilizationSupported,
         )
         if (snapshot.config.logProfile != requestedConfig.logProfile) {
             PLog.w(
@@ -2879,53 +2880,52 @@ class Camera2Controller(private val context: Context) {
             )
         }
 
-        if (_state.value.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED) {
-            val enhancedInput = snapshot.capabilities
-                .enhancedStabilizationInputSizesByResolution[snapshot.config.resolution]
-            if (snapshot.config.stabilizationMode == VideoStabilizationMode.ENHANCED) {
-                PLog.i(
-                    TAG,
-                    "EIS+ capability accepted: resolution=${snapshot.config.resolution.displayName}, " +
-                        "fps=${snapshot.config.fps.fps}, yuvInput=$enhancedInput"
-                )
-            } else {
-                PLog.e(
-                    TAG,
-                    "EIS+ capability rejected: resolution=${snapshot.config.resolution.displayName}, " +
-                        "fps=${snapshot.config.fps.fps}, yuvInput=$enhancedInput, " +
-                        "reason=missing YUV output for the selected resolution"
-                )
-            }
+        val enhancedInput = snapshot.capabilities
+            .enhancedStabilizationInputSizesByResolution[snapshot.config.resolution]
+        val preserveRequestedEisPlus =
+            requestedConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
+                enhancedInput != null
+        if (requestedConfig.stabilizationMode == VideoStabilizationMode.ENHANCED) {
+            PLog.i(
+                TAG,
+                "EIS+ capability: resolution=${snapshot.config.resolution.displayName}, " +
+                    "fps=${snapshot.config.fps.fps}, yuvInput=$enhancedInput, " +
+                    "gyroPipelineSupported=$algorithmicStabilizationSupported, " +
+                    "preservingRequestedMode=$preserveRequestedEisPlus"
+            )
         }
 
-        val enhancedFallbackMode = if (
-            _state.value.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
-            snapshot.config.stabilizationMode != VideoStabilizationMode.ENHANCED
+        // A temporary capability refresh must not silently replace a user-selected EIS+ mode
+        // with hardware OIS/EIS. The dedicated YUV size is the hard requirement for creating
+        // real software stabilization frames; when that stream is present, preserve the request
+        // and expose EIS+ in the mode list while the camera's calibrated gyro pipeline initializes.
+        val resolvedConfig = if (preserveRequestedEisPlus) {
+            snapshot.config.copy(stabilizationMode = VideoStabilizationMode.ENHANCED)
+        } else {
+            snapshot.config
+        }
+        val resolvedVideoCapabilities = if (
+            preserveRequestedEisPlus &&
+            VideoStabilizationMode.ENHANCED !in snapshot.capabilities.availableStabilizationModes
         ) {
-            resolvePreviousVideoStabilizationMode(
-                snapshot.capabilities.availableStabilizationModes
+            snapshot.capabilities.copy(
+                availableStabilizationModes =
+                    (snapshot.capabilities.availableStabilizationModes +
+                        VideoStabilizationMode.ENHANCED).distinct()
             )
         } else {
-            null
+            snapshot.capabilities
         }
-        val resolvedConfig = enhancedFallbackMode?.let { fallbackMode ->
-            snapshot.config.copy(stabilizationMode = fallbackMode)
-        } ?: snapshot.config
+
         _state.value = _state.value.copy(
             videoConfig = resolvedConfig,
-            videoCapabilities = snapshot.capabilities,
+            videoCapabilities = resolvedVideoCapabilities,
             currentPreviewSize = if (_state.value.captureMode == CaptureMode.VIDEO) {
                 snapshot.previewSize
             } else {
                 _state.value.currentPreviewSize
             }
         )
-        if (enhancedFallbackMode != null) {
-            previousVideoStabilizationMode = enhancedFallbackMode
-            notifyEnhancedStabilizationUnavailable(
-                EnhancedStabilizationFallback.Video(enhancedFallbackMode)
-            )
-        }
         return snapshot.previewSize
     }
 
