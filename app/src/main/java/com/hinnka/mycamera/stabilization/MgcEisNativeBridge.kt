@@ -403,7 +403,7 @@ internal object MgcEisNativeBridge {
                 ?: estimatedFx.coerceIn(MIN_CLIP_FOCAL, MAX_CLIP_FOCAL)
             val fy = intrinsics?.getOrNull(1)?.let { 2.0 * it / frame.cropHeight }
                 ?.takeIf { it.isFinite() && it in MIN_CLIP_FOCAL..MAX_CLIP_FOCAL }
-                ?: (fx * frame.width.toDouble() / frame.height.toDouble())
+                ?: (fx * width.toDouble() / height.toDouble())
                     .coerceIn(MIN_CLIP_FOCAL, MAX_CLIP_FOCAL)
             return fx to fy
         }
