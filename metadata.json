@@ -1,0 +1,8 @@
+{
+  "name": "Photon Camera",
+  "description": "Professional photography camera app with custom LUTs, color recipes, and raw image processing",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

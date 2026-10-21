@@ -1,10 +1,14 @@
-import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
-
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
+}
+
+// Clean up any empty resource files that cause AAPT2 premature EOF errors
+file("src/main/res").walkTopDown().filter { it.isFile && it.length() == 0L }.forEach {
+  logger.lifecycle("Removing empty resource file: ${it.path}")
+  it.delete()
 }
 
 android {
@@ -53,6 +57,9 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
+      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
+      // AI Studio.
+      signingConfig = signingConfigs.getByName("debugConfig")
     }
   }
   compileOptions {
