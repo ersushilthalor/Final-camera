@@ -843,8 +843,6 @@ class Camera2Controller(private val context: Context) {
     var onEnhancedStabilizationUnavailable: ((EnhancedStabilizationFallback) -> Unit)? = null
     var onVideoSaved: ((Uri?) -> Unit)? = null
     private var previousVideoStabilizationMode = VideoStabilizationMode.OIS
-    private val enhancedStabilizationUnavailableCameraIds =
-        ConcurrentHashMap.newKeySet<String>()
 
     init {
         realtimeStabilizationCoordinator.onEnhancedStabilizationUnavailable = {
@@ -2863,8 +2861,7 @@ class Camera2Controller(private val context: Context) {
 
         val requestedConfig = _state.value.videoConfig
         val algorithmicStabilizationSupported =
-            realtimeStabilizationCoordinator.isCameraSupported(resolvedCharacteristics) &&
-                !isEnhancedStabilizationUnavailableForCurrentCamera()
+            realtimeStabilizationCoordinator.isCameraSupported(resolvedCharacteristics)
         val snapshot = VideoCapabilitiesResolver.resolve(
             characteristics = resolvedCharacteristics,
             requestedConfig = requestedConfig,
@@ -4130,9 +4127,6 @@ class Camera2Controller(private val context: Context) {
 
             state.captureMode == CaptureMode.PHOTO &&
                 state.photoPreviewStabilizationEnabled -> {
-                currentStabilizationCameraId()
-                    .takeIf { it.isNotEmpty() }
-                    ?.let(enhancedStabilizationUnavailableCameraIds::add)
                 PLog.e(TAG, "Disabling photo preview stabilization: $reason")
                 _state.value = state.copy(photoPreviewStabilizationEnabled = false)
                 refreshVideoCapabilities()
@@ -7671,16 +7665,6 @@ class Camera2Controller(private val context: Context) {
 
     fun setVideoStabilizationMode(mode: VideoStabilizationMode) {
         val previousConfig = _state.value.videoConfig
-        if (mode == VideoStabilizationMode.ENHANCED &&
-            isEnhancedStabilizationUnavailableForCurrentCamera()
-        ) {
-            PLog.w(
-                TAG,
-                "Ignoring EIS+ selection because it was already verified unavailable for " +
-                    currentStabilizationCameraId()
-            )
-            return
-        }
         when {
             mode == VideoStabilizationMode.ENHANCED &&
                 previousConfig.stabilizationMode != VideoStabilizationMode.ENHANCED -> {
@@ -8013,10 +7997,6 @@ class Camera2Controller(private val context: Context) {
         return activeOutputPhysicalCameraId
             ?.takeIf { it.isNotEmpty() }
             ?: getActiveOpenCameraId()
-    }
-
-    private fun isEnhancedStabilizationUnavailableForCurrentCamera(): Boolean {
-        return currentStabilizationCameraId() in enhancedStabilizationUnavailableCameraIds
     }
 
     private fun resolvePreviousVideoStabilizationMode(
