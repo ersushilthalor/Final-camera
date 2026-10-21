@@ -822,6 +822,7 @@ class Camera2Controller(private val context: Context) {
     private var stabilizationInputStatsFirstTimestampNs: Long = 0L
     private var stabilizationInputStatsFrames: Int = 0
     private var stabilizationInputFrameCount: Long = 0L
+    private var enhancedStabilizationInputRecoveryAttempts: Int = 0
     private var mirrorFrontCameraEnabled: Boolean = true
     @Volatile
     private var cameraOpenGeneration: Long = 0L
@@ -4033,6 +4034,8 @@ class Camera2Controller(private val context: Context) {
         val timestampNs = image.timestampNs
         if (timestampNs <= 0L) return
         stabilizationInputFrameCount += 1L
+        // A real YUV callback confirms the EIS+ camera input recovered.
+        enhancedStabilizationInputRecoveryAttempts = 0
         if (stabilizationInputStatsFirstTimestampNs == 0L) {
             stabilizationInputStatsFirstTimestampNs = timestampNs
             stabilizationInputStatsFrames = 1
@@ -4098,42 +4101,38 @@ class Camera2Controller(private val context: Context) {
         }
 
         val state = _state.value
-        currentStabilizationCameraId()
-            .takeIf { it.isNotEmpty() }
-            ?.let(enhancedStabilizationUnavailableCameraIds::add)
         when {
             state.captureMode == CaptureMode.VIDEO &&
                 state.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED -> {
-                val fallbackMode = resolvePreviousVideoStabilizationMode(
-                    state.videoCapabilities.availableStabilizationModes
-                )
-                PLog.e(
-                    TAG,
-                    "Disabling EIS+: $reason at " +
-                        "${state.videoConfig.resolution.displayName}@" +
-                        "${state.videoConfig.fps.fps}; fallback=$fallbackMode"
-                )
-                previousVideoStabilizationMode = fallbackMode
-                _state.value = state.copy(
-                    videoConfig = state.videoConfig.copy(stabilizationMode = fallbackMode)
-                )
-                refreshVideoCapabilities()
-                previousVideoStabilizationMode =
-                    _state.value.videoConfig.stabilizationMode
-                notifyEnhancedStabilizationUnavailable(
-                    EnhancedStabilizationFallback.Video(
-                        _state.value.videoConfig.stabilizationMode
+                // EIS+ is the requested processing mode, not a hint to switch to OIS/EIS when
+                // the YUV frame feeder stalls. Recreate the same EIS+ Camera2 session a limited
+                // number of times to recover a missed ImageReader stream, without changing the
+                // persisted setting or marking the current camera unsupported.
+                if (!state.videoRecordingState.isRecording &&
+                    cameraDevice != null && previewSurface != null &&
+                    enhancedStabilizationInputRecoveryAttempts < 2
+                ) {
+                    enhancedStabilizationInputRecoveryAttempts += 1
+                    PLog.w(
+                        TAG,
+                        "EIS+ YUV input stalled ($reason); restarting EIS+ session " +
+                            "attempt=$enhancedStabilizationInputRecoveryAttempts/2 without mode fallback"
                     )
-                )
-                if (_state.value.videoRecordingState.isRecording) {
-                    videoRecorder.forceStop()
-                } else if (cameraDevice != null && previewSurface != null) {
                     createPreviewSession(openGeneration = cameraOpenGeneration)
+                } else {
+                    PLog.e(
+                        TAG,
+                        "EIS+ remains selected; YUV input is still unavailable: $reason. " +
+                            "Keeping the live camera viewfinder visible and preserving EIS+ mode."
+                    )
                 }
             }
 
             state.captureMode == CaptureMode.PHOTO &&
                 state.photoPreviewStabilizationEnabled -> {
+                currentStabilizationCameraId()
+                    .takeIf { it.isNotEmpty() }
+                    ?.let(enhancedStabilizationUnavailableCameraIds::add)
                 PLog.e(TAG, "Disabling photo preview stabilization: $reason")
                 _state.value = state.copy(photoPreviewStabilizationEnabled = false)
                 refreshVideoCapabilities()
