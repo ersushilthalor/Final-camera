@@ -255,6 +255,7 @@ class RealtimeStabilizationCoordinator(context: Context) {
     private var nativeFrameAttemptCount = 0L
     private var captureResultCount = 0L
     private var consecutiveHalStabilizationConflictCount = 0
+    private var lastHalConflictWarningCaptureResultCount = 0L
     private var rawGyroCallbackCount = 0L
     private var opticalCorrectionSourceActive = false
     private var dynamicLensIntrinsicsSourceActive = false
@@ -595,11 +596,16 @@ class RealtimeStabilizationCoordinator(context: Context) {
                 // default electronic-stabilization mode in CaptureResult. Keep feeding the
                 // timestamp-matched YUV frames into the requested software EIS+ pipeline rather
                 // than silently shutting that pipeline off or changing the user's mode.
-                PLog.w(
-                    TAG,
-                    "Camera HAL reports video stabilization=$actualVideoStabilization despite " +
-                        "request=$requestedVideoStabilization; retaining software EIS+",
-                )
+                if (lastHalConflictWarningCaptureResultCount == 0L ||
+                    captureResultCount - lastHalConflictWarningCaptureResultCount >= 60L
+                ) {
+                    PLog.w(
+                        TAG,
+                        "Camera HAL reports video stabilization=$actualVideoStabilization despite " +
+                            "request=$requestedVideoStabilization; retaining software EIS+",
+                    )
+                    lastHalConflictWarningCaptureResultCount = captureResultCount
+                }
                 consecutiveHalStabilizationConflictCount = 0
             }
             frameMetadata[timestampNs] = metadata
