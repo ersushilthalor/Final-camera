@@ -1071,9 +1071,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 }
             }
             if (currentCameraTextureSource != PreviewColorTextureSource.TEXTURE_2D) {
-                GLES30.glClearColor(0f, 0f, 0f, 1f)
-                GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-                return
+                // Keep the live camera OES frame visible while the real EIS+ pipeline warms up
+                // its lookahead window or skips an image without a usable pose. EIS+ remains
+                // enabled; as soon as a timestamp-matched stabilized YUV frame is rendered, the
+                // texture switches to TEXTURE_2D above. Clearing here made a valid camera session
+                // look like a dead/black camera whenever the first stabilization result was late.
+                useCurrentOesFrame()
             }
         } else if (cameraFrameUpdated) {
             useCurrentOesFrame()
