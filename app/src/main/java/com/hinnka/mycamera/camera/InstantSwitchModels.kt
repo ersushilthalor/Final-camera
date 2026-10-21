@@ -44,7 +44,13 @@ data class MotorolaInstantSwitchState(
     val lensSwitchHoldDurationSec: Float = 0.02f,
     val isLensSwitchOverlapAnimationEnabled: Boolean = true,
     val lensSwitchPointMm: Float = 23.0f
-)
+) {
+    val lensSwitchHoldDurationMs: Long
+        get() = (lensSwitchHoldDurationSec * 1000f + 0.5f).toLong()
+
+    val lensSwitchOverlapDurationMs: Long
+        get() = (lensSwitchOverlapDurationSec * 1000f + 0.5f).toLong()
+}
 
 /**
  * Preview layer state for legacy overlap and frame-based lens handoff.

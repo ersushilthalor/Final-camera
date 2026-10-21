@@ -237,6 +237,9 @@ class Camera2Controller(private val context: Context) {
     // the active/standby pair concurrent. Lens/zoom transitions stay in the UI layer.
     private val backgroundUltraWideReady = BackgroundUltraWideReady(context)
     @Volatile private var keepUltraWideReadyEnabled = false
+    @Volatile var isAutoSwitchToUltraWideEnabled = false
+    var onAutoMacroSwitchRequested: ((switchToUltraWide: Boolean) -> Unit)? = null
+    private val isAutoMacroActive = java.util.concurrent.atomic.AtomicBoolean(false)
     // Separate OES input owned by the preview renderer. The standby Camera2 session
     // writes into this target while the primary lens remains active.
     @Volatile private var standbyPreviewSurfaceTexture: SurfaceTexture? = null
@@ -1644,6 +1647,30 @@ class Camera2Controller(private val context: Context) {
             lastCaptureResult = result
             logVideoCaptureStats(result)
             if (session === captureSession) updateEnginePreviewSource(result)
+
+            if (isAutoSwitchToUltraWideEnabled && !_state.value.videoRecordingState.isRecording) {
+                val currentCamera = _state.value.getCurrentCameraInfo()
+                if (currentCamera?.lensFacing == CameraCharacteristics.LENS_FACING_BACK) {
+                    val focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0.0f
+                    val afState = result.get(CaptureResult.CONTROL_AF_STATE) ?: CaptureResult.CONTROL_AF_STATE_INACTIVE
+                    if (currentCamera.lensType == LensType.BACK_MAIN && !isAutoMacroActive.get()) {
+                        val isStruggling = afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED ||
+                            afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED ||
+                            (focusDistance >= 6.0f && (afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN || afState == CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN))
+                        if (focusDistance >= 5.5f && isStruggling && _state.value.zoomRatio in 0.9f..1.6f) {
+                            if (isAutoMacroActive.compareAndSet(false, true)) {
+                                onAutoMacroSwitchRequested?.invoke(true)
+                            }
+                        }
+                    } else if (currentCamera.lensType == LensType.BACK_ULTRA_WIDE && isAutoMacroActive.get()) {
+                        if (focusDistance < 3.0f && (afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED || afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED)) {
+                            if (isAutoMacroActive.compareAndSet(true, false)) {
+                                onAutoMacroSwitchRequested?.invoke(false)
+                            }
+                        }
+                    }
+                }
+            }
 
             // 处理拍照状态机
             processStillFlashPrecapture(request, result)

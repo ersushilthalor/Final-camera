@@ -283,6 +283,8 @@ data class UserPreferences(
     val keepUltraWideReadyEnabled: Boolean = true,
     val isAutoSwitchToUltraWide: Boolean = false,
     val isShowUltraWidePreview: Boolean = false,
+    val isKeepFrontCameraReady: Boolean = true,
+    val isShowFrontCameraPreview: Boolean = false,
     val lensSwitchHoldDurationSec: Float = 0.02f,
     val isLensSwitchOverlapAnimationEnabled: Boolean = true,
     val lensSwitchOverlapDurationSec: Float = 0.30f,
@@ -581,6 +583,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val PREF_KEEP_ULTRAWIDE_READY = booleanPreferencesKey("pref_keep_ultrawide_ready")
         private val KEY_AUTO_SWITCH_TO_ULTRAWIDE = booleanPreferencesKey("pref_auto_switch_to_ultrawide")
         private val KEY_SHOW_ULTRAWIDE_PREVIEW = booleanPreferencesKey("pref_show_ultrawide_preview")
+        private val KEY_KEEP_FRONT_READY = booleanPreferencesKey("pref_keep_front_ready")
+        private val KEY_SHOW_FRONT_PREVIEW = booleanPreferencesKey("pref_show_front_preview")
         private val KEY_LENS_SWITCH_HOLD_DURATION_SEC = floatPreferencesKey("pref_lens_switch_hold_duration_sec")
         private val KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED = booleanPreferencesKey("pref_lens_switch_overlap_animation_enabled")
         private val KEY_LENS_SWITCH_OVERLAP_DURATION_SEC = floatPreferencesKey("pref_lens_switch_overlap_duration_sec")
@@ -967,6 +971,8 @@ class UserPreferencesRepository(private val context: Context) {
                     ?: preferences[PREF_KEEP_ULTRAWIDE_READY] ?: true,
                 isAutoSwitchToUltraWide = preferences[KEY_AUTO_SWITCH_TO_ULTRAWIDE] ?: false,
                 isShowUltraWidePreview = preferences[KEY_SHOW_ULTRAWIDE_PREVIEW] ?: false,
+                isKeepFrontCameraReady = preferences[KEY_KEEP_FRONT_READY] ?: true,
+                isShowFrontCameraPreview = preferences[KEY_SHOW_FRONT_PREVIEW] ?: false,
                 lensSwitchHoldDurationSec = preferences[KEY_LENS_SWITCH_HOLD_DURATION_SEC] ?: 0.02f,
                 isLensSwitchOverlapAnimationEnabled = preferences[KEY_LENS_SWITCH_OVERLAP_ANIMATION_ENABLED] ?: true,
                 lensSwitchOverlapDurationSec = preferences[KEY_LENS_SWITCH_OVERLAP_DURATION_SEC] ?: 0.30f,
@@ -2122,6 +2128,20 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
     suspend fun setShowUltraWidePreview(enabled: Boolean) = saveShowUltraWidePreview(enabled)
+
+    suspend fun saveKeepFrontCameraReady(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_KEEP_FRONT_READY] = enabled
+        }
+    }
+    suspend fun setKeepFrontCameraReady(enabled: Boolean) = saveKeepFrontCameraReady(enabled)
+
+    suspend fun saveShowFrontCameraPreview(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_SHOW_FRONT_PREVIEW] = enabled
+        }
+    }
+    suspend fun setShowFrontCameraPreview(enabled: Boolean) = saveShowFrontCameraPreview(enabled)
 
     suspend fun saveLensSwitchHoldDuration(durationSec: Float) {
         context.dataStore.edit { preferences ->

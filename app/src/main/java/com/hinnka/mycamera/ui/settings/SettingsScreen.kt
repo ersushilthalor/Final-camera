@@ -83,6 +83,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import kotlin.math.roundToInt
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.graphics.Color
@@ -350,6 +352,13 @@ fun SettingsScreen(
     val preferredMacroCameraId by viewModel.preferredMacroCameraId.collectAsState(initial = null)
     val enableLogicalMultiCameraDiscovery by viewModel.enableLogicalMultiCameraDiscovery.collectAsState(initial = false)
     val keepUltraWideReadyEnabled by viewModel.keepUltraWideReadyEnabled.collectAsState(initial = false)
+    val isAutoSwitchToUltraWide by viewModel.isAutoSwitchToUltraWide.collectAsState(initial = false)
+    val isShowUltraWidePreview by viewModel.isShowUltraWidePreview.collectAsState(initial = false)
+    val isKeepFrontCameraReady by viewModel.isKeepFrontCameraReady.collectAsState(initial = true)
+    val isShowFrontCameraPreview by viewModel.isShowFrontCameraPreview.collectAsState(initial = false)
+    val lensSwitchHoldDurationSec by viewModel.lensSwitchHoldDurationSec.collectAsState(initial = 0.02f)
+    val isLensSwitchOverlapAnimationEnabled by viewModel.isLensSwitchOverlapAnimationEnabled.collectAsState(initial = true)
+    val lensSwitchOverlapDurationSec by viewModel.lensSwitchOverlapDurationSec.collectAsState(initial = 0.30f)
     val logicalCameraBindingWhitelist by viewModel.logicalCameraBindingWhitelist.collectAsState(initial = emptyList())
     val jpgMultiFrameDenoiseFrameCount by viewModel.jpgMultiFrameDenoiseFrameCount.collectAsState()
     val jpgMultiFrameDenoiseOutputScale by viewModel.jpgMultiFrameDenoiseOutputScale.collectAsState()
@@ -1341,11 +1350,88 @@ fun SettingsScreen(
                     SettingsSection(
                         title = stringResource(R.string.settings_focus_lens_group_lens_discovery)
                     ) {
+                        LensSwitchHoldDurationSettingCard(
+                            holdDurationSec = lensSwitchHoldDurationSec,
+                            onHoldDurationChange = { viewModel.setLensSwitchHoldDuration(it) },
+                            isOverlapAnimationEnabled = isLensSwitchOverlapAnimationEnabled
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
                         SwitchSettingItem(
-                            title = "Keep Ultra-Wide Lens Ready",
-                            description = "Keeps the rear ultra-wide lens warmed in the background when concurrent camera streams are supported. Uses extra power; unsupported combinations are skipped safely.",
+                            title = "Frame-Based Lens Handoff",
+                            description = "Keep the old preview visible while zoom continues. Blend into the target camera over its first four valid preview frames. OFF keeps the existing switch behavior.",
+                            checked = isLensSwitchOverlapAnimationEnabled,
+                            onCheckedChange = { viewModel.setLensSwitchOverlapAnimationEnabled(it) },
+                            modifier = Modifier.testTag("toggle_lens_switch_overlap_animation")
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = "Keep Ultra Wide Ready",
+                            description = "Keep Main and Ultra-Wide cameras active and ready in background simultaneously for instant, zero-lag lens switching during photo and video recording.",
                             checked = keepUltraWideReadyEnabled,
-                            onCheckedChange = { viewModel.setKeepUltraWideReadyEnabled(it) }
+                            onCheckedChange = { viewModel.setKeepUltraWideReady(it) },
+                            modifier = Modifier.testTag("toggle_keep_ultrawide_ready")
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = "Auto Switch to Ultra Wide",
+                            description = "Automatically switch to the ultra-wide lens when close-up subjects cannot achieve focus on the main lens, and switch back when moving away.",
+                            checked = isAutoSwitchToUltraWide,
+                            onCheckedChange = { viewModel.setAutoSwitchToUltraWide(it) },
+                            modifier = Modifier.testTag("toggle_auto_switch_to_ultra_wide")
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = "Ultra-Wide Mini Preview",
+                            description = "Picture-in-picture live view from the ultra-wide lens.",
+                            checked = isShowUltraWidePreview,
+                            onCheckedChange = { viewModel.setShowUltraWidePreview(it) },
+                            modifier = Modifier.testTag("toggle_uw_preview")
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = "Front Camera Little Preview",
+                            description = "Picture-in-picture live view from the front-facing camera.",
+                            checked = isShowFrontCameraPreview,
+                            onCheckedChange = { viewModel.setShowFrontCameraPreview(it) },
+                            modifier = Modifier.testTag("toggle_front_preview")
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = "Keep Front Camera Ready",
+                            description = "Keep front camera ready in background for instant switching between rear and front cameras.",
+                            checked = isKeepFrontCameraReady,
+                            onCheckedChange = { viewModel.setKeepFrontCameraReady(it) },
+                            modifier = Modifier.testTag("toggle_keep_front_ready")
                         )
 
                         HorizontalDivider(
@@ -6689,3 +6775,106 @@ private fun FocalLengthChip(
         }
     }
 }
+
+@Composable
+private fun LensSwitchHoldDurationSettingCard(
+    holdDurationSec: Float,
+    onHoldDurationChange: (Float) -> Unit,
+    isOverlapAnimationEnabled: Boolean = false
+) {
+    val roundedDuration = ((holdDurationSec.coerceIn(0.0f, 0.30f) * 100f).roundToInt() / 100f).coerceIn(0.0f, 0.30f)
+    val isDefault = kotlin.math.abs(roundedDuration - 0.02f) < 0.001f
+    val holdMillis = (roundedDuration * 1000f).roundToInt()
+    val displayValue = when {
+        holdMillis == 0 -> "0 ms"
+        isOverlapAnimationEnabled && isDefault -> "$holdMillis ms (Default • Fallback)"
+        isOverlapAnimationEnabled -> "$holdMillis ms (Fallback)"
+        isDefault -> "$holdMillis ms (Default)"
+        else -> "$holdMillis ms"
+    }
+
+    val options = listOf(
+        0.0f to "0 ms",
+        0.02f to "20 ms (Default)",
+        0.05f to "50 ms",
+        0.10f to "100 ms",
+        0.15f to "150 ms",
+        0.20f to "200 ms",
+        0.25f to "250 ms",
+        0.30f to "300 ms"
+    )
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("setting_lens_switch_hold_duration_card"),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color.White.copy(alpha = 0.06f)
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Lens Switch Hold Duration",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Briefly pause zoom progression at 1.0x when crossing between ultra-wide and main lenses during continuous zoom gestures.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.7f)
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                androidx.compose.material3.Surface(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = displayValue,
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items(options) { (sec, label) ->
+                    val isSelected = kotlin.math.abs(roundedDuration - sec) < 0.005f
+                    androidx.compose.material3.Surface(
+                        modifier = Modifier.clickable { onHoldDurationChange(sec) },
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.10f)
+                    ) {
+                        Text(
+                            text = label,
+                            color = if (isSelected) Color.Black else Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+

@@ -1585,6 +1585,23 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         userPreferencesRepository.userPreferences.map { it.enableLogicalMultiCameraDiscovery }
     val keepUltraWideReadyEnabled: Flow<Boolean> =
         userPreferencesRepository.userPreferences.map { it.keepUltraWideReadyEnabled }
+    val isAutoSwitchToUltraWide: Flow<Boolean> =
+        userPreferencesRepository.userPreferences.map { it.isAutoSwitchToUltraWide }
+    val isShowUltraWidePreview: Flow<Boolean> =
+        userPreferencesRepository.userPreferences.map { it.isShowUltraWidePreview }
+    val isKeepFrontCameraReady: Flow<Boolean> =
+        userPreferencesRepository.userPreferences.map { it.isKeepFrontCameraReady }
+    val isShowFrontCameraPreview: Flow<Boolean> =
+        userPreferencesRepository.userPreferences.map { it.isShowFrontCameraPreview }
+    val lensSwitchHoldDurationSec: Flow<Float> =
+        userPreferencesRepository.userPreferences.map { it.lensSwitchHoldDurationSec }
+    val isLensSwitchOverlapAnimationEnabled: Flow<Boolean> =
+        userPreferencesRepository.userPreferences.map { it.isLensSwitchOverlapAnimationEnabled }
+    val lensSwitchOverlapDurationSec: Flow<Float> =
+        userPreferencesRepository.userPreferences.map { it.lensSwitchOverlapDurationSec }
+
+    private val _instantSwitchState = MutableStateFlow(MotorolaInstantSwitchState())
+    val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
     val logicalCameraBindingWhitelist: Flow<List<String>> =
         userPreferencesRepository.userPreferences.map { it.logicalCameraBindingWhitelist }
     val userPreferences: StateFlow<UserPreferences> = userPreferencesRepository.userPreferences
@@ -1966,6 +1983,46 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 .map { it.keepUltraWideReadyEnabled }
                 .distinctUntilChanged()
                 .collect { cameraController.setKeepUltraWideReadyEnabled(it) }
+        }
+        viewModelScope.launch {
+            userPreferencesRepository.userPreferences.collect { prefs ->
+                cameraController.isAutoSwitchToUltraWideEnabled = prefs.isAutoSwitchToUltraWide
+                _instantSwitchState.update { current ->
+                    current.copy(
+                        isKeepUltraWideReady = prefs.keepUltraWideReadyEnabled,
+                        isAutoSwitchToUltraWide = prefs.isAutoSwitchToUltraWide,
+                        isShowUltraWidePreview = prefs.isShowUltraWidePreview,
+                        isKeepFrontCameraReady = prefs.isKeepFrontCameraReady,
+                        isShowFrontCameraPreview = prefs.isShowFrontCameraPreview,
+                        lensSwitchHoldDurationSec = prefs.lensSwitchHoldDurationSec,
+                        isLensSwitchOverlapAnimationEnabled = prefs.isLensSwitchOverlapAnimationEnabled,
+                        lensSwitchOverlapDurationSec = prefs.lensSwitchOverlapDurationSec,
+                        lensSwitchPointMm = prefs.lensSwitchPointMm,
+                        ultraWideStatus = if (prefs.keepUltraWideReadyEnabled) BackgroundCameraStatus.READY_QUIET else BackgroundCameraStatus.OFF
+                    )
+                }
+            }
+        }
+        cameraController.onAutoMacroSwitchRequested = { switchToUltraWide ->
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                if (switchToUltraWide) {
+                    val ultraLens = state.value.availableCameras.firstOrNull {
+                        it.lensFacing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.BACK_ULTRA_WIDE
+                    }
+                    if (ultraLens != null) {
+                        _instantSwitchState.update { it.copy(isAutoMacroActive = true) }
+                        switchToLens(ultraLens.cameraId)
+                    }
+                } else {
+                    val mainLens = state.value.availableCameras.firstOrNull {
+                        it.lensFacing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.BACK_MAIN
+                    }
+                    if (mainLens != null) {
+                        _instantSwitchState.update { it.copy(isAutoMacroActive = false) }
+                        switchToLens(mainLens.cameraId)
+                    }
+                }
+            }
         }
         cameraController.onEnhancedStabilizationUnavailable = { fallback ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -6071,6 +6128,94 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveKeepUltraWideReadyEnabled(enabled)
             cameraController.setKeepUltraWideReadyEnabled(enabled)
+        }
+    }
+
+    fun setKeepUltraWideReady(enabled: Boolean) = setKeepUltraWideReadyEnabled(enabled)
+
+    fun setAutoSwitchToUltraWide(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setAutoSwitchToUltraWide(enabled)
+            cameraController.isAutoSwitchToUltraWideEnabled = enabled
+            _instantSwitchState.update { it.copy(isAutoSwitchToUltraWide = enabled) }
+        }
+    }
+
+    fun setShowUltraWidePreview(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setShowUltraWidePreview(enabled)
+            _instantSwitchState.update { it.copy(isShowUltraWidePreview = enabled) }
+        }
+    }
+
+    fun setKeepFrontCameraReady(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setKeepFrontCameraReady(enabled)
+            _instantSwitchState.update { it.copy(isKeepFrontCameraReady = enabled) }
+        }
+    }
+
+    fun setShowFrontCameraPreview(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setShowFrontCameraPreview(enabled)
+            _instantSwitchState.update { it.copy(isShowFrontCameraPreview = enabled) }
+        }
+    }
+
+    fun setLensSwitchHoldDuration(seconds: Float) {
+        val clamped = (kotlin.math.round(seconds.coerceIn(0.0f, 0.30f) * 100f) / 100f).coerceIn(0.0f, 0.30f)
+        viewModelScope.launch {
+            userPreferencesRepository.setLensSwitchHoldDuration(clamped)
+            _instantSwitchState.update { it.copy(lensSwitchHoldDurationSec = clamped) }
+        }
+    }
+
+    fun setLensSwitchOverlapAnimationEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setLensSwitchOverlapAnimationEnabled(enabled)
+            _instantSwitchState.update { it.copy(isLensSwitchOverlapAnimationEnabled = enabled) }
+        }
+    }
+
+    fun setLensSwitchOverlapDuration(seconds: Float) {
+        val clamped = (kotlin.math.round(seconds.coerceIn(0.1f, 1.0f) * 10f) / 10f).coerceIn(0.1f, 1.0f)
+        viewModelScope.launch {
+            userPreferencesRepository.setLensSwitchOverlapDuration(clamped)
+            _instantSwitchState.update { it.copy(lensSwitchOverlapDurationSec = clamped) }
+        }
+    }
+
+    fun onUltraWideLittlePreviewSurfaceAvailable(surfaceTexture: SurfaceTexture?) {
+        // Safe stub - no background camera HAL lock
+    }
+
+    fun onFrontLittlePreviewSurfaceAvailable(surfaceTexture: SurfaceTexture?) {
+        // Safe stub - no background camera HAL lock
+    }
+
+    fun switchToUltraWideInstant() {
+        val ultraLens = state.value.availableCameras.firstOrNull {
+            it.lensFacing == CameraCharacteristics.LENS_FACING_BACK && it.lensType == LensType.BACK_ULTRA_WIDE
+        }
+        if (ultraLens != null) {
+            switchToLens(ultraLens.cameraId)
+        } else {
+            android.widget.Toast.makeText(
+                getApplication(),
+                "Real Ultra-Wide lens is not available on this device",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    fun switchToFrontInstant() {
+        val frontLens = state.value.availableCameras.firstOrNull {
+            it.lensFacing == CameraCharacteristics.LENS_FACING_FRONT
+        }
+        if (frontLens != null) {
+            switchToLens(frontLens.cameraId)
+        } else {
+            switchCamera()
         }
     }
 

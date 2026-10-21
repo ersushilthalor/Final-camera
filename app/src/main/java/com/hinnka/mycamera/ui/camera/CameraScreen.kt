@@ -68,6 +68,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.CameraState
+import com.hinnka.mycamera.camera.LensType
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.PhotoCaptureProgress
 import com.hinnka.mycamera.data.CaptureButtonStyle
@@ -236,6 +237,7 @@ fun CameraScreen(
     val eyeFocusEnabled by viewModel.eyeFocusEnabled.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
     val currentLutId by viewModel.currentLutId.collectAsState()
+    val instantSwitchState by viewModel.instantSwitchState.collectAsState()
     val lutNameOverlayState = rememberLutNameOverlayState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
     val lutSelectorMode by viewModel.lutSelectorMode.collectAsState()
@@ -1607,6 +1609,33 @@ fun CameraScreen(
                     LutNameOverlay(
                         state = lutNameOverlayState,
                         modifier = Modifier.align(Alignment.Center),
+                    )
+
+                    val isUsingRearLens = state.currentLensType != LensType.FRONT
+                    val isUsingRearMainLens = state.currentLensType == LensType.BACK_MAIN
+                    LittlePreviewOverlay(
+                        showUltraWidePreview = instantSwitchState.isShowUltraWidePreview && isUsingRearMainLens,
+                        showFrontPreview = instantSwitchState.isShowFrontCameraPreview && isUsingRearLens,
+                        ultraWideStatus = instantSwitchState.ultraWideStatus,
+                        frontStatus = instantSwitchState.frontStatus,
+                        onUltraWideSurfaceTextureAvailable = { texture ->
+                            viewModel.onUltraWideLittlePreviewSurfaceAvailable(texture)
+                        },
+                        onFrontSurfaceTextureAvailable = { texture ->
+                            viewModel.onFrontLittlePreviewSurfaceAvailable(texture)
+                        },
+                        onUltraWideClick = {
+                            viewModel.switchToUltraWideInstant()
+                        },
+                        onFrontClick = {
+                            viewModel.switchToFrontInstant()
+                        },
+                        onCloseUltraWidePreview = {
+                            viewModel.setShowUltraWidePreview(false)
+                        },
+                        onCloseFrontPreview = {
+                            viewModel.setShowFrontCameraPreview(false)
+                        }
                     )
                 }
             }

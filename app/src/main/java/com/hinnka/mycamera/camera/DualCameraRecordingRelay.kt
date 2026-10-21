@@ -305,10 +305,7 @@ class DualCameraRecordingRelay(
             activeSource = source
             pendingClockSyncOnSwitch = true
             switchCount.incrementAndGet()
-            cinemaRecorder?.setActiveStreamSource(source)
             Log.i(TAG, "[RECORDING_RELAY] Switched active recording stream to $source (switches=${switchCount.get()})")
-        } else {
-            cinemaRecorder?.setActiveStreamSource(source)
         }
     }
 
