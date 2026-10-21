@@ -217,6 +217,22 @@ data class CameraInfo(
         }?.cameraId ?: outputPhysicalCameraId
     }
 
+    val id: String get() = cameraId
+    val facing: Int get() = lensFacing
+    val isPrimaryMain: Boolean get() = lensType == LensType.BACK_MAIN
+    val isPhysical: Boolean get() = !isVirtualIszLens
+    val supportsPhysicalStream: Boolean get() = outputPhysicalCameraId != null || physicalCameras.isNotEmpty()
+    val physicalCameraId: String? get() = outputPhysicalCameraId
+    val isIndependentCamera: Boolean get() = logicalCameraId == null || logicalCameraId == cameraId
+    val isLogicalMultiCamera: Boolean get() = physicalCameraIds.isNotEmpty()
+    val baseZoomRatio: Float get() = displayIntrinsicZoomRatio
+    val minZoomRatio: Float get() = minZoom
+    val displayName: String get() = getLensDisplayName()
+    val focalLengthMm: Float get() = focalLength
+    val equivalent35mmFocalMm: Float get() = focalLength35mmEquivalent
+    val isZoomPreset: Boolean get() = isVirtualIszLens
+    val maxAperture: Float get() = 1.8f
+
     /**
      * 获取镜头类型显示名称
      */

@@ -37,6 +37,17 @@ class CameraDiscovery(private val context: Context) {
 
         // Vivo 需要跳过探测的机型
         private val VIVO_SKIP_MODELS = setOf("V1914A", "V2023EA")
+
+        fun resolveSwitchStrategy(currentLens: CameraInfo?, targetLens: CameraInfo): LensSwitchStrategy {
+            if (currentLens == null) return LensSwitchStrategy.INDEPENDENT_DEVICE
+            if (currentLens.cameraId != targetLens.cameraId || currentLens.lensFacing != targetLens.lensFacing) {
+                return LensSwitchStrategy.INDEPENDENT_DEVICE
+            }
+            if (targetLens.physicalCameraIds.isNotEmpty() && targetLens.outputPhysicalCameraId != null) {
+                return LensSwitchStrategy.LOGICAL_PHYSICAL_STREAM
+            }
+            return LensSwitchStrategy.LOGICAL_ZOOM
+        }
     }
 
     private val cameraManager: CameraManager by lazy {

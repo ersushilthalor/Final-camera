@@ -822,7 +822,6 @@ class Camera2Controller(private val context: Context) {
     private var stabilizationInputStatsFirstTimestampNs: Long = 0L
     private var stabilizationInputStatsFrames: Int = 0
     private var stabilizationInputFrameCount: Long = 0L
-    private var enhancedStabilizationInputRecoveryAttempts: Int = 0
     private var mirrorFrontCameraEnabled: Boolean = true
     @Volatile
     private var cameraOpenGeneration: Long = 0L
@@ -843,6 +842,8 @@ class Camera2Controller(private val context: Context) {
     var onEnhancedStabilizationUnavailable: ((EnhancedStabilizationFallback) -> Unit)? = null
     var onVideoSaved: ((Uri?) -> Unit)? = null
     private var previousVideoStabilizationMode = VideoStabilizationMode.OIS
+    private val enhancedStabilizationUnavailableCameraIds =
+        ConcurrentHashMap.newKeySet<String>()
 
     init {
         realtimeStabilizationCoordinator.onEnhancedStabilizationUnavailable = {
@@ -2762,7 +2763,6 @@ class Camera2Controller(private val context: Context) {
             PLog.w(TAG, "Ignoring stale preview session failure: $reason")
             return
         }
-
         cameraOpenGeneration++
         if (error != null) {
             PLog.e(TAG, "Preview session failed: $reason", error)
@@ -2860,12 +2860,12 @@ class Camera2Controller(private val context: Context) {
         }
 
         val requestedConfig = _state.value.videoConfig
-        val algorithmicStabilizationSupported =
-            realtimeStabilizationCoordinator.isCameraSupported(resolvedCharacteristics)
         val snapshot = VideoCapabilitiesResolver.resolve(
             characteristics = resolvedCharacteristics,
             requestedConfig = requestedConfig,
-            algorithmicStabilizationSupported = algorithmicStabilizationSupported,
+            algorithmicStabilizationSupported =
+                realtimeStabilizationCoordinator.isCameraSupported(resolvedCharacteristics) &&
+                    !isEnhancedStabilizationUnavailableForCurrentCamera(),
         )
         if (snapshot.config.logProfile != requestedConfig.logProfile) {
             PLog.w(
@@ -2877,52 +2877,53 @@ class Camera2Controller(private val context: Context) {
             )
         }
 
-        val enhancedInput = snapshot.capabilities
-            .enhancedStabilizationInputSizesByResolution[snapshot.config.resolution]
-        val preserveRequestedEisPlus =
-            requestedConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
-                enhancedInput != null
-        if (requestedConfig.stabilizationMode == VideoStabilizationMode.ENHANCED) {
-            PLog.i(
-                TAG,
-                "EIS+ capability: resolution=${snapshot.config.resolution.displayName}, " +
-                    "fps=${snapshot.config.fps.fps}, yuvInput=$enhancedInput, " +
-                    "gyroPipelineSupported=$algorithmicStabilizationSupported, " +
-                    "preservingRequestedMode=$preserveRequestedEisPlus"
-            )
+        if (_state.value.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED) {
+            val enhancedInput = snapshot.capabilities
+                .enhancedStabilizationInputSizesByResolution[snapshot.config.resolution]
+            if (snapshot.config.stabilizationMode == VideoStabilizationMode.ENHANCED) {
+                PLog.i(
+                    TAG,
+                    "EIS+ capability accepted: resolution=${snapshot.config.resolution.displayName}, " +
+                        "fps=${snapshot.config.fps.fps}, yuvInput=$enhancedInput"
+                )
+            } else {
+                PLog.e(
+                    TAG,
+                    "EIS+ capability rejected: resolution=${snapshot.config.resolution.displayName}, " +
+                        "fps=${snapshot.config.fps.fps}, yuvInput=$enhancedInput, " +
+                        "reason=missing YUV output for the selected resolution"
+                )
+            }
         }
 
-        // A temporary capability refresh must not silently replace a user-selected EIS+ mode
-        // with hardware OIS/EIS. The dedicated YUV size is the hard requirement for creating
-        // real software stabilization frames; when that stream is present, preserve the request
-        // and expose EIS+ in the mode list while the camera's calibrated gyro pipeline initializes.
-        val resolvedConfig = if (preserveRequestedEisPlus) {
-            snapshot.config.copy(stabilizationMode = VideoStabilizationMode.ENHANCED)
-        } else {
-            snapshot.config
-        }
-        val resolvedVideoCapabilities = if (
-            preserveRequestedEisPlus &&
-            VideoStabilizationMode.ENHANCED !in snapshot.capabilities.availableStabilizationModes
+        val enhancedFallbackMode = if (
+            _state.value.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED &&
+            snapshot.config.stabilizationMode != VideoStabilizationMode.ENHANCED
         ) {
-            snapshot.capabilities.copy(
-                availableStabilizationModes =
-                    (snapshot.capabilities.availableStabilizationModes +
-                        VideoStabilizationMode.ENHANCED).distinct()
+            resolvePreviousVideoStabilizationMode(
+                snapshot.capabilities.availableStabilizationModes
             )
         } else {
-            snapshot.capabilities
+            null
         }
-
+        val resolvedConfig = enhancedFallbackMode?.let { fallbackMode ->
+            snapshot.config.copy(stabilizationMode = fallbackMode)
+        } ?: snapshot.config
         _state.value = _state.value.copy(
             videoConfig = resolvedConfig,
-            videoCapabilities = resolvedVideoCapabilities,
+            videoCapabilities = snapshot.capabilities,
             currentPreviewSize = if (_state.value.captureMode == CaptureMode.VIDEO) {
                 snapshot.previewSize
             } else {
                 _state.value.currentPreviewSize
             }
         )
+        if (enhancedFallbackMode != null) {
+            previousVideoStabilizationMode = enhancedFallbackMode
+            notifyEnhancedStabilizationUnavailable(
+                EnhancedStabilizationFallback.Video(enhancedFallbackMode)
+            )
+        }
         return snapshot.previewSize
     }
 
@@ -4031,8 +4032,6 @@ class Camera2Controller(private val context: Context) {
         val timestampNs = image.timestampNs
         if (timestampNs <= 0L) return
         stabilizationInputFrameCount += 1L
-        // A real YUV callback confirms the EIS+ camera input recovered.
-        enhancedStabilizationInputRecoveryAttempts = 0
         if (stabilizationInputStatsFirstTimestampNs == 0L) {
             stabilizationInputStatsFirstTimestampNs = timestampNs
             stabilizationInputStatsFrames = 1
@@ -4098,30 +4097,37 @@ class Camera2Controller(private val context: Context) {
         }
 
         val state = _state.value
+        currentStabilizationCameraId()
+            .takeIf { it.isNotEmpty() }
+            ?.let(enhancedStabilizationUnavailableCameraIds::add)
         when {
             state.captureMode == CaptureMode.VIDEO &&
                 state.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED -> {
-                // EIS+ is the requested processing mode, not a hint to switch to OIS/EIS when
-                // the YUV frame feeder stalls. Recreate the same EIS+ Camera2 session a limited
-                // number of times to recover a missed ImageReader stream, without changing the
-                // persisted setting or marking the current camera unsupported.
-                if (!state.videoRecordingState.isRecording &&
-                    cameraDevice != null && previewSurface != null &&
-                    enhancedStabilizationInputRecoveryAttempts < 2
-                ) {
-                    enhancedStabilizationInputRecoveryAttempts += 1
-                    PLog.w(
-                        TAG,
-                        "EIS+ YUV input stalled ($reason); restarting EIS+ session " +
-                            "attempt=$enhancedStabilizationInputRecoveryAttempts/2 without mode fallback"
+                val fallbackMode = resolvePreviousVideoStabilizationMode(
+                    state.videoCapabilities.availableStabilizationModes
+                )
+                PLog.e(
+                    TAG,
+                    "Disabling EIS+: $reason at " +
+                        "${state.videoConfig.resolution.displayName}@" +
+                        "${state.videoConfig.fps.fps}; fallback=$fallbackMode"
+                )
+                previousVideoStabilizationMode = fallbackMode
+                _state.value = state.copy(
+                    videoConfig = state.videoConfig.copy(stabilizationMode = fallbackMode)
+                )
+                refreshVideoCapabilities()
+                previousVideoStabilizationMode =
+                    _state.value.videoConfig.stabilizationMode
+                notifyEnhancedStabilizationUnavailable(
+                    EnhancedStabilizationFallback.Video(
+                        _state.value.videoConfig.stabilizationMode
                     )
+                )
+                if (_state.value.videoRecordingState.isRecording) {
+                    videoRecorder.forceStop()
+                } else if (cameraDevice != null && previewSurface != null) {
                     createPreviewSession(openGeneration = cameraOpenGeneration)
-                } else {
-                    PLog.e(
-                        TAG,
-                        "EIS+ remains selected; YUV input is still unavailable: $reason. " +
-                            "Keeping the live camera viewfinder visible and preserving EIS+ mode."
-                    )
                 }
             }
 
@@ -7665,6 +7671,16 @@ class Camera2Controller(private val context: Context) {
 
     fun setVideoStabilizationMode(mode: VideoStabilizationMode) {
         val previousConfig = _state.value.videoConfig
+        if (mode == VideoStabilizationMode.ENHANCED &&
+            isEnhancedStabilizationUnavailableForCurrentCamera()
+        ) {
+            PLog.w(
+                TAG,
+                "Ignoring EIS+ selection because it was already verified unavailable for " +
+                    currentStabilizationCameraId()
+            )
+            return
+        }
         when {
             mode == VideoStabilizationMode.ENHANCED &&
                 previousConfig.stabilizationMode != VideoStabilizationMode.ENHANCED -> {
@@ -7997,6 +8013,10 @@ class Camera2Controller(private val context: Context) {
         return activeOutputPhysicalCameraId
             ?.takeIf { it.isNotEmpty() }
             ?: getActiveOpenCameraId()
+    }
+
+    private fun isEnhancedStabilizationUnavailableForCurrentCamera(): Boolean {
+        return currentStabilizationCameraId() in enhancedStabilizationUnavailableCameraIds
     }
 
     private fun resolvePreviousVideoStabilizationMode(

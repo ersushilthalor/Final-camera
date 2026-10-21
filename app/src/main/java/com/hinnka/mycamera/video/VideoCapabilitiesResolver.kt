@@ -72,12 +72,8 @@ object VideoCapabilitiesResolver {
                 ?.let { preset to it }
         }.toMap()
         val enhancedStabilizationInputSizesByResolution = availableResolutions.mapNotNull { preset ->
-            findBestStabilizationInputSize(
-                outputSizes = yuvOutputSizes,
-                preset = preset,
-                aspectRatio = requestedConfig.aspectRatio,
-                openGatePortraitAspectRatio = openGateAspect,
-            )?.let { preset to it }
+            findBestOutputSize(yuvOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
+                ?.let { preset to it }
         }.toMap()
 
         val resolvedResolution = requestedConfig.resolution.takeIf { availableResolutions.contains(it) }
@@ -245,48 +241,6 @@ object VideoCapabilitiesResolver {
                 .maxByOrNull { it.width.toLong() * it.height.toLong() }
         }
         return null
-    }
-
-    /**
-     * EIS+ processes Camera2 YUV frames in software, so its input stream does not need to match
-     * the encoded output preset pixel-for-pixel. Prefer the largest YUV stream at or below the
-     * selected preset; if the HAL only exposes a larger stream, use the closest available one.
-     * This keeps EIS+ genuinely active on 4K output configurations even on sensors whose YUV
-     * stream tops out at 1080p, instead of silently changing the user's stabilization mode.
-     */
-    private fun findBestStabilizationInputSize(
-        outputSizes: List<Size>,
-        preset: VideoResolutionPreset,
-        aspectRatio: VideoAspectRatio,
-        openGatePortraitAspectRatio: Float,
-    ): Size? {
-        val validSizes = outputSizes.filter { it.width > 0 && it.height > 0 }.distinctBy {
-            it.width to it.height
-        }
-        if (validSizes.isEmpty()) return null
-
-        val targetAspect = aspectRatio.getPortraitAspectRatio(openGatePortraitAspectRatio)
-        val aspectMatched = validSizes.filter {
-            abs(getPortraitAspectRatio(it) - targetAspect) <= VIDEO_PREVIEW_ASPECT_TOLERANCE
-        }
-        val candidates = aspectMatched.ifEmpty { validSizes }
-        if (aspectRatio == VideoAspectRatio.OPEN_GATE) {
-            return candidates.maxByOrNull { it.width.toLong() * it.height.toLong() }
-        }
-
-        val atOrBelowPreset = candidates.filter {
-            maxOf(it.width, it.height) <= preset.longEdge
-        }
-        if (atOrBelowPreset.isNotEmpty()) {
-            return atOrBelowPreset.maxByOrNull { it.width.toLong() * it.height.toLong() }
-        }
-        return candidates.minWithOrNull(
-            compareBy<Size> {
-                abs(maxOf(it.width, it.height) - preset.longEdge)
-            }.thenBy {
-                abs(getPortraitAspectRatio(it) - targetAspect)
-            }
-        )
     }
 
     private fun isEightMpFourThreeSource(size: Size): Boolean {
