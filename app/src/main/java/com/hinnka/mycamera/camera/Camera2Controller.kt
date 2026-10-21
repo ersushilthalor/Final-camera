@@ -2754,6 +2754,22 @@ class Camera2Controller(private val context: Context) {
         onCameraError?.invoke(errorCode, message, true)
     }
 
+    private fun fallbackFromAlgorithmicStabilizationOnSessionFailure(reason: String): Boolean {
+        val state = _state.value
+        val algorithmicStabilizationEnabled =
+            (state.captureMode == CaptureMode.VIDEO &&
+                state.videoConfig.stabilizationMode == VideoStabilizationMode.ENHANCED) ||
+                (state.captureMode == CaptureMode.PHOTO && state.photoPreviewStabilizationEnabled)
+        if (!algorithmicStabilizationEnabled) return false
+
+        PLog.e(
+            TAG,
+            "Stabilization preview session failed; falling back to the regular camera preview: $reason"
+        )
+        handleEnhancedStabilizationUnavailable("camera preview session failed: $reason")
+        return true
+    }
+
     private fun handlePreviewSessionFailure(
         reason: String,
         openGeneration: Long,
@@ -2763,6 +2779,13 @@ class Camera2Controller(private val context: Context) {
             PLog.w(TAG, "Ignoring stale preview session failure: $reason")
             return
         }
+
+        // EIS+ adds a YUV camera output to the preview session. Some camera HALs reject
+        // that output combination (or fail when the repeating request starts). Do not
+        // tear down the whole camera and leave the viewfinder black: disable algorithmic
+        // stabilization for this camera and rebuild a normal preview session first.
+        if (fallbackFromAlgorithmicStabilizationOnSessionFailure(reason)) return
+
         cameraOpenGeneration++
         if (error != null) {
             PLog.e(TAG, "Preview session failed: $reason", error)
