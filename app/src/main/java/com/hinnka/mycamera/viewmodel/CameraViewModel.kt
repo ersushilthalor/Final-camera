@@ -1602,6 +1602,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _instantSwitchState = MutableStateFlow(MotorolaInstantSwitchState())
     val instantSwitchState: StateFlow<MotorolaInstantSwitchState> = _instantSwitchState.asStateFlow()
+
+    val zoomTransitionController = ZoomTransitionController(
+        onApplyZoomToEngine = { zoom, _ -> setZoomRatio(zoom) },
+        onSelectLensOnEngine = { lens, targetZoom, _ -> switchToLensAndSetZoomRatio(lens.cameraId, targetZoom) }
+    )
+    val previewOverlapState: StateFlow<PreviewOverlapState> = zoomTransitionController.previewOverlapState
     val logicalCameraBindingWhitelist: Flow<List<String>> =
         userPreferencesRepository.userPreferences.map { it.logicalCameraBindingWhitelist }
     val userPreferences: StateFlow<UserPreferences> = userPreferencesRepository.userPreferences
@@ -1987,6 +1993,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.userPreferences.collect { prefs ->
                 cameraController.isAutoSwitchToUltraWideEnabled = prefs.isAutoSwitchToUltraWide
+                zoomTransitionController.isOverlapAnimationEnabled = prefs.isLensSwitchOverlapAnimationEnabled
+                zoomTransitionController.overlapDurationMs = (prefs.lensSwitchOverlapDurationSec * 1000f + 0.5f).toLong()
+                zoomTransitionController.holdAtOneXDurationMs = (prefs.lensSwitchHoldDurationSec * 1000f + 0.5f).toLong()
                 _instantSwitchState.update { current ->
                     current.copy(
                         isKeepUltraWideReady = prefs.keepUltraWideReadyEnabled,
@@ -2002,6 +2011,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             }
+        }
+        zoomTransitionController.onHandoffCompleted = { targetSource ->
+            PLog.d(TAG, "Frame-based handoff completed to $targetSource")
         }
         cameraController.onAutoMacroSwitchRequested = { switchToUltraWide ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -3937,6 +3949,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setStandbyVisibleZoomRatio(visibleZoomRatio)
         instantStandbyPreviewHandoffJob?.cancel()
         instantStandbyPreviewHandoffCameraId = cameraId
+
+        val currentCamera = current.getCurrentCameraInfo()
+        val target = current.availableCameras.firstOrNull { it.cameraId == cameraId }
+        val isTargetUltraWide = target?.lensType == LensType.BACK_ULTRA_WIDE
+        val targetSource = if (isTargetUltraWide) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+        val fromSource = if (targetSource == PreviewStreamSource.ULTRAWIDE) PreviewStreamSource.MAIN else PreviewStreamSource.ULTRAWIDE
+
+        zoomTransitionController.beginFrameBasedHandoff(fromSource, targetSource, viewModelScope)
+
         preview.setActivePreviewSource(true)
         instantStandbyPreviewHandoffJob = viewModelScope.launch {
             try {
@@ -3983,6 +4004,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             return false
         }
 
+        val currentCamera = current.getCurrentCameraInfo()
+        val target = current.availableCameras.firstOrNull { it.cameraId == cameraId }
+        val isTargetUltraWide = target?.lensType == LensType.BACK_ULTRA_WIDE
+        val targetSource = if (isTargetUltraWide) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+        val fromSource = if (targetSource == PreviewStreamSource.ULTRAWIDE) PreviewStreamSource.MAIN else PreviewStreamSource.ULTRAWIDE
+
         // Frame the warmed stream before selecting it, then update both the encoder and viewfinder.
         cameraController.setStandbyVisibleZoomRatio(visibleZoomRatio)
         val useStandby = cameraController.switchVideoLensInputInstantly(
@@ -3992,6 +4019,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         ) ?: return false
         zoomRatioByMain = visibleZoomRatio
         preview.setActivePreviewSource(useStandby)
+        zoomTransitionController.beginFrameBasedHandoff(fromSource, targetSource, viewModelScope)
         PLog.i(
             TAG,
             "Instant video lens switch completed: camera=$cameraId, source=" +
@@ -4000,9 +4028,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return true
     }
 
+    fun canSwitchLensInstantly(cameraId: String): Boolean {
+        val preview = glSurfaceView ?: return false
+        val canSwitchStandbyPreview = preview.canSwitchToStandbyPreviewSource()
+        if (!canSwitchStandbyPreview) return false
+        val current = state.value
+        return if (current.captureMode == CaptureMode.VIDEO && current.videoRecordingState.isRecording) {
+            cameraController.canInstantlySwitchVideoInput(cameraId, canSwitchStandbyPreview)
+        } else {
+            cameraController.canInstantlySwitchStandbyPreview(cameraId, canSwitchStandbyPreview)
+        }
+    }
+
+    fun onPreviewFrameAvailable(source: PreviewStreamSource) {
+        zoomTransitionController.onPreviewFrameAvailable(source)
+    }
+
     fun isInstantLensSwitchActive(cameraId: String): Boolean =
         cameraController.isInstantVideoLensInputActive(cameraId) ||
-            instantStandbyPreviewHandoffCameraId == cameraId
+            instantStandbyPreviewHandoffCameraId == cameraId ||
+            zoomTransitionController.isTransitionActive.value
 
     /**
      * Keep the current logical Camera2 device open when both selected lenses belong to it.
@@ -4111,6 +4156,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置变焦倍数
      */
     fun setZoomRatio(ratio: Float) {
+        val currentCamera = state.value.getCurrentCameraInfo()
+        if (currentCamera != null) {
+            val isCurrentUltraWide = currentCamera.lensType == LensType.BACK_ULTRA_WIDE
+            val fromSource = if (isCurrentUltraWide) PreviewStreamSource.ULTRAWIDE else PreviewStreamSource.MAIN
+            val targetSource = if (isCurrentUltraWide) PreviewStreamSource.MAIN else PreviewStreamSource.ULTRAWIDE
+            if (ZoomTransitionController.isFrameBasedHandoffEligible(zoomRatioByMain, ratio)) {
+                zoomTransitionController.prepareFrameBasedHandoff(fromSource, targetSource)
+            }
+        }
         zoomRatioByMain = ratio
         cameraController.setStandbyVisibleZoomRatio(ratio)
         if (instantStandbyPreviewHandoffCameraId != null) {
@@ -6166,6 +6220,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val clamped = (kotlin.math.round(seconds.coerceIn(0.0f, 0.30f) * 100f) / 100f).coerceIn(0.0f, 0.30f)
         viewModelScope.launch {
             userPreferencesRepository.setLensSwitchHoldDuration(clamped)
+            zoomTransitionController.holdAtOneXDurationMs = (clamped * 1000f + 0.5f).toLong()
             _instantSwitchState.update { it.copy(lensSwitchHoldDurationSec = clamped) }
         }
     }
@@ -6173,6 +6228,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setLensSwitchOverlapAnimationEnabled(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.setLensSwitchOverlapAnimationEnabled(enabled)
+            zoomTransitionController.isOverlapAnimationEnabled = enabled
             _instantSwitchState.update { it.copy(isLensSwitchOverlapAnimationEnabled = enabled) }
         }
     }
@@ -6181,6 +6237,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val clamped = (kotlin.math.round(seconds.coerceIn(0.1f, 1.0f) * 10f) / 10f).coerceIn(0.1f, 1.0f)
         viewModelScope.launch {
             userPreferencesRepository.setLensSwitchOverlapDuration(clamped)
+            zoomTransitionController.overlapDurationMs = (clamped * 1000f + 0.5f).toLong()
             _instantSwitchState.update { it.copy(lensSwitchOverlapDurationSec = clamped) }
         }
     }

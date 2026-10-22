@@ -226,6 +226,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     @Volatile private var standbySurfaceTexture: SurfaceTexture? = null
     private val frameAvailable = AtomicBoolean(false)
     private val standbyFrameAvailable = AtomicBoolean(false)
+    @Volatile private var standbyFramesReceived = 0L
+    @Volatile private var lastStandbyFrameTimestampNs = 0L
+    @Volatile private var mainFramesReceived = 0L
     @Volatile private var activePreviewSourceIndex = 0
     private var stabilizationCoordinator: RealtimeStabilizationCoordinator? = null
     @Volatile
@@ -494,6 +497,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     // 回调
     var onSurfaceTextureAvailable: ((SurfaceTexture) -> Unit)? = null
     var onStandbySurfaceTextureAvailable: ((SurfaceTexture) -> Unit)? = null
+    var onPreviewFrameAvailable: ((com.hinnka.mycamera.camera.PreviewStreamSource) -> Unit)? = null
     var onRequestRender: (() -> Unit)? = null
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
@@ -540,10 +544,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
         // Primary camera SurfaceTexture.
         frameAvailable.set(false)
+        mainFramesReceived = 0L
         surfaceTexture = SurfaceTexture(cameraTextureId).apply {
             setDefaultBufferSize(previewWidth, previewHeight)
             setOnFrameAvailableListener {
                 frameAvailable.set(true)
+                mainFramesReceived++
+                onPreviewFrameAvailable?.invoke(com.hinnka.mycamera.camera.PreviewStreamSource.MAIN)
                 if (activePreviewSourceIndex == 0 &&
                     (previewStabilizationUseCase == null ||
                         stabilizationCoordinator?.isCurrentCameraSupported != true)
@@ -557,10 +564,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         // source continues through the exact same LUT, color recipe, sharpening and video-log path.
         standbyCameraTextureId = GlUtils.createOESTexture()
         standbyFrameAvailable.set(false)
+        standbyFramesReceived = 0L
+        lastStandbyFrameTimestampNs = 0L
         standbySurfaceTexture = SurfaceTexture(standbyCameraTextureId).apply {
             setDefaultBufferSize(previewWidth, previewHeight)
             setOnFrameAvailableListener {
                 standbyFrameAvailable.set(true)
+                standbyFramesReceived++
+                lastStandbyFrameTimestampNs = System.nanoTime()
+                onPreviewFrameAvailable?.invoke(com.hinnka.mycamera.camera.PreviewStreamSource.ULTRAWIDE)
                 if (activePreviewSourceIndex == 1 &&
                     previewStabilizationUseCase == null
                 ) {
@@ -3208,7 +3220,15 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     fun canSwitchToStandbyPreviewSource(): Boolean {
         return previewStabilizationUseCase == null &&
             standbySurfaceTexture != null &&
-            standbyFrameAvailable.get()
+            (standbyFramesReceived > 0L || standbyFrameAvailable.get())
+    }
+
+    fun hasStandbyFrameDelivered(): Boolean = standbyFramesReceived > 0L
+    fun getStandbyFramesReceived(): Long = standbyFramesReceived
+    fun getLastStandbyFrameTimestampNs(): Long = lastStandbyFrameTimestampNs
+    fun resetStandbyFrames() {
+        standbyFramesReceived = 0L
+        lastStandbyFrameTimestampNs = 0L
     }
 
     /**
@@ -3374,6 +3394,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         standbySurfaceTexture = null
         frameAvailable.set(false)
         standbyFrameAvailable.set(false)
+        standbyFramesReceived = 0L
+        lastStandbyFrameTimestampNs = 0L
+        mainFramesReceived = 0L
         activePreviewSourceIndex = 0
 
         // 重置状态

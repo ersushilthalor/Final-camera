@@ -66,8 +66,14 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
 
     var onSurfaceReady: ((Surface) -> Unit)? = null
+    var onStandbySurfaceReady: ((SurfaceTexture) -> Unit)? = null
     var onSurfaceDestroyed: (() -> Unit)? = null
     var onFirstPreviewFrame: (() -> Unit)? = null
+    var onPreviewFrameAvailable: ((com.hinnka.mycamera.camera.PreviewStreamSource) -> Unit)? = null
+        set(value) {
+            field = value
+            renderer.onPreviewFrameAvailable = value
+        }
     private var currentSurface: Surface? = null
 
     init {
@@ -89,6 +95,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             post {
                 val surface = currentSurface ?: return@post
                 onSurfaceReady?.invoke(surface)
+            }
+        }
+
+        renderer.onStandbySurfaceTextureAvailable = { standbyTexture ->
+            post {
+                onStandbySurfaceReady?.invoke(standbyTexture)
             }
         }
 
@@ -322,6 +334,12 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     fun getStandbySurfaceTexture(): SurfaceTexture? = renderer.getStandbySurfaceTexture()
 
     fun canSwitchToStandbyPreviewSource(): Boolean = renderer.canSwitchToStandbyPreviewSource()
+
+    fun hasStandbyFrameDelivered(): Boolean = renderer.hasStandbyFrameDelivered()
+
+    fun getStandbyFramesReceived(): Long = renderer.getStandbyFramesReceived()
+
+    fun resetStandbyFrames() = renderer.resetStandbyFrames()
 
     fun setActivePreviewSource(useStandby: Boolean) {
         queueEvent {

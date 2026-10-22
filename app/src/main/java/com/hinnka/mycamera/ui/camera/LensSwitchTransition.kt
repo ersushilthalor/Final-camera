@@ -74,6 +74,11 @@ internal class LensSwitchTransitionState(
 
     fun switchLens(cameraId: String, targetZoom: Float, onSwitch: () -> Unit) {
         require(targetZoom.isFinite() && targetZoom > 0f)
+        if (viewModel.canSwitchLensInstantly(cameraId)) {
+            cancel()
+            onSwitch()
+            return
+        }
         // Keep the newest request queued while the currently active hand-off waits for its
         // first real target frame. A continuous zoom can cross UW -> Main -> Tele before the
         // first camera's new preview arrives; dropping that second request leaves the UI stale.

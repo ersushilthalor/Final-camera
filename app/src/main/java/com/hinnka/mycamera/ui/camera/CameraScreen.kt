@@ -1400,6 +1400,7 @@ fun CameraScreen(
                                 null
                             },
                             onFirstPreviewFrame = viewModel::onFirstPreviewFrame,
+                            onPreviewFrameAvailable = viewModel::onPreviewFrameAvailable,
                             onGLSurfaceViewReady = {
                                 viewModel.glSurfaceView = it
                             },

@@ -51,6 +51,8 @@ internal class BackgroundUltraWideReady(context: Context) {
     @Volatile private var standbyCameraId: String? = null
     @Volatile private var activeCameraId: String? = null
     @Volatile private var requestedVisibleZoomRatio: Float = 1f
+    @Volatile private var standbyFrameCount: Long = 0L
+    @Volatile private var lastStandbyFrameTimestampNs: Long = 0L
     private var standbyLensInfo: CameraInfo? = null
     private var standbyCharacteristics: CameraCharacteristics? = null
     private var standbyRequestBuilder: CaptureRequest.Builder? = null
@@ -59,6 +61,18 @@ internal class BackgroundUltraWideReady(context: Context) {
     private var pendingCameraTransfer: PendingCameraTransfer? = null
     private var transferredStateCallback: CameraDevice.StateCallback? = null
     @Volatile private var transferredDevice: CameraDevice? = null
+
+    private val standbyCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            result: android.hardware.camera2.TotalCaptureResult
+        ) {
+            standbyFrameCount++
+            lastStandbyFrameTimestampNs = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP)
+                ?: SystemClock.elapsedRealtimeNanos()
+        }
+    }
 
     private data class PendingCameraTransfer(
         val cameraId: String,
@@ -69,7 +83,9 @@ internal class BackgroundUltraWideReady(context: Context) {
 
     /** True only when the standby device and its warm-up stream are both ready for hand-off. */
     fun isReadyFor(cameraId: String): Boolean =
-        standbyCameraId == cameraId && standbyDevice != null && standbySession != null
+        standbyCameraId == cameraId && standbyDevice != null && standbySession != null && standbyFrameCount > 0L
+
+    fun getStandbyFrameCount(): Long = standbyFrameCount
 
     /**
      * Video can use the second encoder input only if that exact surface was configured on the
@@ -282,7 +298,7 @@ internal class BackgroundUltraWideReady(context: Context) {
                                                 force = true,
                                                 submitToSession = false
                                             )
-                                            session.setRepeatingRequest(requestBuilder.build(), null, handler)
+                                            session.setRepeatingRequest(requestBuilder.build(), standbyCaptureCallback, handler)
                                             PLog.i(TAG, "Ultra-wide standby stream ready: cameraId=$standbyId, size=${chosenSize.width}x${chosenSize.height}")
                                         } catch (error: Exception) {
                                             PLog.w(TAG, "Could not start standby repeating stream: ${error.message}")
@@ -420,7 +436,7 @@ internal class BackgroundUltraWideReady(context: Context) {
                     Rect(left, top, left + width, top + height)
                 )
             }
-            if (submitToSession) session.setRepeatingRequest(builder.build(), null, handler)
+            if (submitToSession) session.setRepeatingRequest(builder.build(), standbyCaptureCallback, handler)
             lastStandbyZoomRatio = targetRatio
             lastStandbyZoomUpdateAtMs = now
         } catch (error: Exception) {
@@ -460,6 +476,8 @@ internal class BackgroundUltraWideReady(context: Context) {
         releaseStandbyOutputLocked()
         standbyCameraId = null
         activeCameraId = null
+        standbyFrameCount = 0L
+        lastStandbyFrameTimestampNs = 0L
         pending?.onReady?.invoke(null)
     }
 }

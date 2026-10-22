@@ -41,6 +41,12 @@ class ZoomTransitionController(
         fun isTelephotoPresetToHalfXTransition(fromZoom: Float, targetZoom: Float): Boolean =
             fromZoom >= 1.9f && targetZoom <= 0.6f
 
+        fun isUltraWideToMainTransition(fromZoom: Float, targetZoom: Float): Boolean =
+            fromZoom <= 0.85f && targetZoom >= 0.85f
+
+        fun isMainToUltraWideTransition(fromZoom: Float, targetZoom: Float): Boolean =
+            fromZoom >= 0.85f && targetZoom <= 0.85f
+
         internal fun calculateFrameHandoffProgress(
             incomingFrameCount: Int,
             targetSource: PreviewStreamSource,
@@ -68,8 +74,15 @@ class ZoomTransitionController(
 
         fun isFrameBasedHandoffEligible(fromZoom: Float, targetZoom: Float): Boolean =
             isHalfXToTelephotoPresetTransition(fromZoom, targetZoom) ||
-                isTelephotoPresetToHalfXTransition(fromZoom, targetZoom)
+                isTelephotoPresetToHalfXTransition(fromZoom, targetZoom) ||
+                isUltraWideToMainTransition(fromZoom, targetZoom) ||
+                isMainToUltraWideTransition(fromZoom, targetZoom)
+
+        fun isFrameBasedHandoffEligible(fromSource: PreviewStreamSource, targetSource: PreviewStreamSource): Boolean =
+            fromSource != targetSource
     }
+
+    var onHandoffCompleted: ((targetSource: PreviewStreamSource) -> Unit)? = null
 
     var overlapDurationMs: Long = DEFAULT_OVERLAP_DURATION_MS
     var holdAtOneXDurationMs: Long = DEFAULT_HOLD_AT_ONE_X_DURATION_MS
@@ -171,6 +184,7 @@ class ZoomTransitionController(
                 frameHandoffFromSource = null
                 frameHandoffTimeoutJob = null
                 setSteadyStatePreview(targetSource == PreviewStreamSource.ULTRAWIDE)
+                onHandoffCompleted?.invoke(targetSource)
             }
         }
     }
@@ -205,6 +219,16 @@ class ZoomTransitionController(
         }
 
         val blendFrameCount = frameHandoffFrameCount - FRAME_HANDOFF_WARMUP_FRAMES
+        if (!isOverlapAnimationEnabled || blendFrameCount >= FRAME_HANDOFF_REQUIRED_FRAMES) {
+            frameHandoffTimeoutJob?.cancel()
+            frameHandoffTimeoutJob = null
+            pendingFrameHandoffTarget = null
+            frameHandoffFromSource = null
+            setSteadyStatePreview(targetSource == PreviewStreamSource.ULTRAWIDE)
+            onHandoffCompleted?.invoke(targetSource)
+            return
+        }
+
         val previousProgress = _previewOverlapState.value.overlapProgress
         val progress = calculateFrameHandoffProgress(
             incomingFrameCount = blendFrameCount,
@@ -231,6 +255,7 @@ class ZoomTransitionController(
             pendingFrameHandoffTarget = null
             frameHandoffFromSource = null
             setSteadyStatePreview(targetSource == PreviewStreamSource.ULTRAWIDE)
+            onHandoffCompleted?.invoke(targetSource)
         }
     }
 

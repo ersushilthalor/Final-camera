@@ -74,6 +74,7 @@ fun CameraPreviewGL(
     onMeteringUpdated: ((Double, Double) -> Unit)? = null,
     onHighlightPointUpdated: ((Float, Float) -> Unit)? = null,
     onEyeFocusInputAvailable: ((EyeFocusPreviewFrame) -> Unit)? = null,
+    onPreviewFrameAvailable: ((com.hinnka.mycamera.camera.PreviewStreamSource) -> Unit)? = null,
     onFirstPreviewFrame: (() -> Unit)? = null,
     livePhotoRecorder: LivePhotoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
@@ -244,6 +245,13 @@ fun CameraPreviewGL(
                         glSurfaceView.onMeteringUpdated = { w, l -> onMeteringUpdated?.invoke(w, l) }
                         glSurfaceView.onHighlightPointUpdated = { hx, hy -> onHighlightPointUpdated?.invoke(hx, hy) }
                         glSurfaceView.onEyeFocusInputAvailable = onEyeFocusInputAvailable
+                        glSurfaceView.onPreviewFrameAvailable = onPreviewFrameAvailable
+                        glSurfaceView.onStandbySurfaceReady = { standbyTexture ->
+                            if (notifiedStandbySurfaceTexture !== standbyTexture) {
+                                notifiedStandbySurfaceTexture = standbyTexture
+                                onStandbySurfaceTextureReady(standbyTexture)
+                            }
+                        }
                         glSurfaceView.onFirstPreviewFrame = {
                             if (glSurfaceViewRef === glSurfaceView) {
                                 onFirstPreviewFrame?.invoke()
